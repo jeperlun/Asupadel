@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Liga Pádel Avanzada — 3 Sets</title>
+<style>
+body{font-family:sans-serif;background:#f0f2f5;margin:0;padding:20px;color:#222;}
+.container{max-width:1200px;margin:0 auto;background:#fff;padding:20px;border-radius:12px;box-shadow:0 5px 20px rgba(0,0,0,0.1);}
+h1{text-align:center;margin-bottom:20px;}
+.controls{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px;}
+.controls input, .controls select, .controls button{padding:8px 12px;border-radius:6px;border:1px solid #ccc;font-size:14px;}
+button{cursor:pointer;}
+.jugadores-list{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;}
+.jugador-card{background:#eee;padding:6px 10px;border-radius:6px;}
+.partido{margin-bottom:8px;padding:8px;background:#f9f9f9;border-radius:6px;border:1px solid #ddd;}
+.finalizado{background:#d4edda;}
+table{width:100%;border-collapse:collapse;margin-top:12px;}
+th,td{padding:6px;border:1px solid #ccc;text-align:center;}
+th{background:#2c3e50;color:#fff;}
+.save-status{position:fixed;right:20px;bottom:20px;background:#27ae60;color:#fff;padding:6px 12px;border-radius:12px;opacity:0;transition:0.3s;}
+.save-status.show{opacity:1;}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Ligas de Pádel Avanzada</h1>
+
+<div class="controls">
+<input id="nombreLiga" placeholder="Nombre liga nueva">
+<button onclick="crearLiga()">Crear liga</button>
+<select id="selectLiga" onchange="cambiarLiga()"></select>
+<button onclick="eliminarLiga()">Eliminar liga</button>
+</div>
+
+<div class="controls">
+<input id="nombreJugador" placeholder="Nombre jugador">
+<button onclick="agregarJugador()">Añadir jugador</button>
+<input type="number" id="numJornadas" placeholder="Nº jornadas" min="1">
+<input type="number" id="maxRepsPareja" placeholder="Máx repeticiones pareja" value="2">
+<input type="number" id="maxRepsRivales" placeholder="Máx enfrentamientos rivales" value="3">
+<button onclick="generarCalendarioAvanzado()">Generar calendario</button>
+<button onclick="activarEdicion()">Editar jugadores</button>
+<button onclick="descargarLiga()">Guardar liga</button>
+<input id="cargarArchivo" type="file" style="display:none" onchange="cargarLigaArchivo(event)">
+<button onclick="document.getElementById('cargarArchivo').click()">Cargar liga</button>
+</div>
+
+<div id="listaJugadores" class="jugadores-list"></div>
+<div id="calendario"></div>
+
+<h2>Clasificación</h2>
+<table>
+<thead>
+<tr><th>Pos</th><th>Jugador</th><th>V</th><th>D</th><th>Sets+</th><th>Sets-</th><th>Juegos+</th><th>Juegos-</th><th>Dif. Juegos</th><th>Motivo sanción</th></tr>
+</thead>
+<tbody id="clasificacion"></tbody>
+</table>
+
+<div class="controls">
+<select id="sancJugador"></select>
+<input id="sancJuegos" type="number" placeholder="Juegos a restar">
+<input id="sancMotivo" placeholder="Motivo">
+<button onclick="anadirSancion()">Añadir sanción</button>
+<button onclick="quitarTodasSanciones()">Quitar todas</button>
+</div>
+
+<div id="saveStatus" class="save-status">Guardado</div>
+</div>
+
+<script>
+let ligas={}, ligaActual=null, modoEdicion=false;
+
+function guardarTodo(){
+  localStorage.setItem('ligasPadel', JSON.stringify(ligas));
+  const s=document.getElementById('saveStatus');
+  s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),1500);
+}
+
+function cargarTodo(){
+  const data=localStorage.getItem('ligasPadel');
+  if(data) ligas=JSON.parse(data);
+  actualizarSelectLigas();
+  if(Object.keys(ligas).length>0){ ligaActual=Object.keys(ligas)[0]; cargarLigaActual(); }
+}
+
+function crearLiga(){
+  const nombre=document.getElementById('nombreLiga').value.trim();
+  if(!nombre) return alert('Introduce un nombre de liga');
+  if(ligas[nombre]) return alert('Liga ya existe');
+  ligas[nombre]={jugadores:[],jornadas:[],sanciones:[]};
+  ligaActual=nombre; document.getElementById('nombreLiga').value='';
+  actualizarSelectLigas(); cargarLigaActual(); guardarTodo();
+}
+
+function eliminarLiga(){
+  if(!ligaActual) return;
+  if(!confirm(`Eliminar liga "${ligaActual}"?`)) return;
+  delete ligas[ligaActual];
+  ligaActual=Object.keys(ligas)[0]||null;
+  actualizarSelectLigas(); cargarLigaActual(); guardarTodo();
+}
+
+function actualizarSelectLigas(){
+  const sel=document.getElementById('selectLiga'); sel.innerHTML='';
+  Object.keys(ligas).forEach(l=> sel.innerHTML+=`<option value="${l}" ${l===ligaActual?'selected':''}>${l}</option>`);
+}
+
+function cambiarLiga(){ ligaActual=document.getElementById('selectLiga').value; cargarLigaActual(); }
+
+function cargarLigaActual(){
+  if(!ligaActual){ document.getElementById('listaJugadores').innerHTML=''; document.getElementById('calendario').innerHTML=''; document.getElementById('clasificacion').innerHTML=''; return; }
+  modoEdicion=false; actualizarLista(); mostrarCalendario(); actualizarClasificacion();
+}
+
+function agregarJugador(){
+  if(!ligaActual) return alert('Crea una liga primero');
+  const nombre=document.getElementById('nombreJugador').value.trim();
+  if(!nombre) return alert('Introduce un nombre');
+  if(ligas[ligaActual].jugadores.includes(nombre)) return alert('Jugador ya existe');
+  ligas[ligaActual].jugadores.push(nombre); document.getElementById('nombreJugador').value='';
+  actualizarLista(); guardarTodo();
+}
+
+function actualizarLista(){
+  const cont=document.getElementById('listaJugadores'); cont.innerHTML='';
+  if(!ligaActual) return;
+  ligas[ligaActual].jugadores.forEach(j=>{
+    const div=document.createElement('div'); div.className='jugador-card';
+    div.innerHTML=`${j} <button onclick="editarJugadorPrompt('${j}')">✏️</button> ${modoEdicion?`<button onclick="eliminarJugador('${j}')">❌</button>`:''}`;
+    cont.appendChild(div);
+  });
+  const sel=document.getElementById('sancJugador'); sel.innerHTML='';
+  ligas[ligaActual].jugadores.forEach(j=> sel.innerHTML+=`<option value="${j}">${j}</option>`);
+}
+
+function activarEdicion(){ modoEdicion=!modoEdicion; actualizarLista(); }
+
+function editarJugadorPrompt(nombre){
+  const nuevo=prompt('Nuevo nombre para '+nombre,nombre);
+  if(!nuevo||nuevo===nombre) return;
+  if(ligas[ligaActual].jugadores.includes(nuevo)) return alert('Ya existe jugador con ese nombre');
+  ligas[ligaActual].jugadores=ligas[ligaActual].jugadores.map(j=>j===nombre?nuevo:j);
+  ligas[ligaActual].jornadas.forEach(j=>j.partidos.forEach(p=>p.equipos=p.equipos.map(eq=>eq.map(x=>x===nombre?nuevo:x))));
+  ligas[ligaActual].sanciones.forEach(s=>{ if(s.jugador===nombre) s.jugador=nuevo; });
+  actualizarLista(); actualizarClasificacion(); guardarTodo();
+}
+
+function eliminarJugador(nombre){
+  if(!modoEdicion) return;
+  if(!confirm('Eliminar jugador '+nombre+'?')) return;
+  ligas[ligaActual].jugadores=ligas[ligaActual].jugadores.filter(x=>x!==nombre);
+  ligas[ligaActual].sanciones=ligas[ligaActual].sanciones.filter(s=>s.jugador!==nombre);
+  actualizarLista(); actualizarClasificacion(); guardarTodo();
+}
+
+/* ================= Calendario avanzado 3 sets ================= */
+
+function generarCalendarioAvanzado(){
+  const totalJornadas=parseInt(document.getElementById('numJornadas').value);
+  if(isNaN(totalJornadas)||totalJornadas<1) return alert("Introduce un número válido de jornadas");
+  const jugadores=ligas[ligaActual].jugadores;
+  if(jugadores.length<4) return alert("Se necesitan al menos 4 jugadores");
+  
+  const maxRepsPareja=Math.max(1,parseInt(document.getElementById('maxRepsPareja').value)||2);
+  const maxRepsRivales=Math.max(1,parseInt(document.getElementById('maxRepsRivales').value)||3);
+
+  const jornadas=[];
+  const parejas=[];
+  for(let i=0;i<jugadores.length-1;i++) for(let j=i+1;j<jugadores.length;j++) parejas.push([jugadores[i],jugadores[j]]);
+  const contadorParejas={},contadorEnfrentamientos={};
+  parejas.forEach(p=>contadorParejas[p.join('-')]=0);
+  jugadores.forEach(a=>jugadores.forEach(b=>{if(a!==b)contadorEnfrentamientos[`${a}-${b}`]=0;}));
+
+  const descansosCount={};
+  jugadores.forEach(j=>descansosCount[j]=0);
+
+  for(let j=0;j<totalJornadas;j++){
+    const jornada={numero:j+1,partidos:[],descansos:[]};
+    let disponibles=[...jugadores];
+    if(disponibles.length%4!==0){
+      let numDesc=disponibles.length%4;
+      let orden=disponibles.slice().sort((a,b)=>descansosCount[a]-descansosCount[b]);
+      let descansando=orden.slice(0,numDesc); descansando.forEach(d=>descansosCount[d]++);
+      jornada.descansos=descansando;
+      disponibles=disponibles.filter(x=>!descansando.includes(x));
+    }
+
+    while(disponibles.length>=4){
+      let posibles1=parejas.filter(p=>p.every(x=>disponibles.includes(x))&&contadorParejas[p.join('-')]<maxRepsPareja);
+      if(posibles1.length===0) posibles1=parejas.filter(p=>p.every(x=>disponibles.includes(x)));
+      posibles1.sort((a,b)=>contadorParejas[a.join('-')]-contadorParejas[b.join('-')]||Math.random()-0.5);
+      let p1=posibles1[0]; if(!p1) break;
+
+      let resto=disponibles.filter(x=>!p1.includes(x));
+      let posibles2=parejas.filter(p=>p.every(x=>resto.includes(x))&&contadorParejas[p.join('-')]<maxRepsPareja&&p.every(a=>p1.every(b=>contadorEnfrentamientos[`${a}-${b}`]<maxRepsRivales)));
+      if(posibles2.length===0) posibles2=parejas.filter(p=>p.every(x=>resto.includes(x)));
+      posibles2.sort((a,b)=>{
+        const enfA=contadorEnfrentamientos[`${p1[0]}-${a[0]}`]+contadorEnfrentamientos[`${p1[0]}-${a[1]}`]+contadorEnfrentamientos[`${p1[1]}-${a[0]}`]+contadorEnfrentamientos[`${p1[1]}-${a[1]}`];
+        const enfB=contadorEnfrentamientos[`${p1[0]}-${b[0]}`]+contadorEnfrentamientos[`${p1[0]}-${b[1]}`]+contadorEnfrentamientos[`${p1[1]}-${b[0]}`]+contadorEnfrentamientos[`${p1[1]}-${b[1]}`];
+        return enfA-enfB||Math.random()-0.5;
+      });
+      let p2=posibles2[0]; if(!p2) break;
+
+      const todos=[...p1,...p2]; todos.sort((a,b)=>descansosCount[a]-descansosCount[b]);
+      const capitan=todos[0];
+
+      jornada.partidos.push({equipos:[p1,p2],capitan,sets:[],fijo:false});
+      contadorParejas[p1.join('-')]++; contadorParejas[p2.join('-')]++;
+      p1.forEach(a=>p2.forEach(b=>{contadorEnfrentamientos[`${a}-${b}`]++;contadorEnfrentamientos[`${b}-${a}`]++;}));
+      disponibles=disponibles.filter(x=>!todos.includes(x));
+    }
+
+    jornadas.push(jornada);
+  }
+
+  ligas[ligaActual].jornadas=jornadas;
+  mostrarCalendario(); actualizarClasificacion(); guardarTodo();
+}
+
+/* ================= Mostrar calendario ================= */
+
+function mostrarCalendario(){
+  const cont=document.getElementById('calendario'); cont.innerHTML='';
+  const l=ligas[ligaActual]; if(!l) return;
+  l.jornadas.forEach((j,i)=>{
+    const divJ=document.createElement('div');
+    divJ.innerHTML=`<h3>Jornada ${j.numero}</h3>`;
+    j.partidos.forEach((p,pidx)=>{
+      const divP=document.createElement('div'); divP.className='partido';
+      divP.classList.toggle('finalizado',p.sets.length>0);
+      let setsHTML='';
+      for(let s=0;s<3;s++){
+        const a=p.sets[s]?p.sets[s][0]:0;
+        const b=p.sets[s]?p.sets[s][1]:0;
+        setsHTML+=`<input style="width:40px" id="j${i}_p${pidx}_s${s}a" value="${a}"> - <input style="width:40px" id="j${i}_p${pidx}_s${s}b" value="${b}"> `;
+      }
+      divP.innerHTML=`
+        ${p.equipos[0].join(', ')} VS ${p.equipos[1].join(', ')} 
+        <br>Sets: ${setsHTML}
+        <br><button onclick="registrarResultado(${i},${pidx})">Registrar</button>
+      `;
+      divJ.appendChild(divP);
+    });
+    if(j.descansos.length>0){ const d=document.createElement('div'); d.textContent="Descansan: "+j.descansos.join(', '); divJ.appendChild(d);}
+    cont.appendChild(divJ);
+  });
+}
+
+/* ================= Registrar resultados ================= */
+
+function registrarResultado(jIndex,pIndex){
+  const p=ligas[ligaActual].jornadas[jIndex].partidos[pIndex];
+  const sets=[];
+  for(let s=0;s<3;s++){
+    const a=parseInt(document.getElementById(`j${jIndex}_p${pIndex}_s${s}a`).value)||0;
+    const b=parseInt(document.getElementById(`j${jIndex}_p${pIndex}_s${s}b`).value)||0;
+    sets.push([a,b]);
+  }
+  p.sets=sets; mostrarCalendario(); actualizarClasificacion(); guardarTodo();
+}
+
+/* ================= Clasificación ================= */
+
+function actualizarClasificacion(){
+  const stats={};
+  const jugadores=ligas[ligaActual]?.jugadores||[];
+  jugadores.forEach(j=>stats[j]={v:0,d:0,setsGan:0,setsPer:0,jp:0,jc:0});
+  ligas[ligaActual]?.jornadas.forEach(j=>j.partidos.forEach(p=>{
+    if(!p.sets||p.sets.length===0) return;
+    let ganaA=0,ganaB=0;
+    p.sets.forEach(s=>{
+      const a=s[0],b=s[1];
+      if(a>b){ganaA++; p.equipos[0].forEach(jug=>{stats[jug].setsGan++; stats[jug].jp+=a; stats[jug].jc+=b;}); p.equipos[1].forEach(jug=>{stats[jug].setsPer++; stats[jug].jp+=b; stats[jug].jc+=a;});}
+      else if(b>a){ganaB++; p.equipos[1].forEach(jug=>{stats[jug].setsGan++; stats[jug].jp+=b; stats[jug].jc+=a;}); p.equipos[0].forEach(jug=>{stats[jug].setsPer++; stats[jug].jp+=a; stats[jug].jc+=b;});}
+    });
+    if(ganaA>ganaB){ p.equipos[0].forEach(jug=>stats[jug].v++); p.equipos[1].forEach(jug=>stats[jug].d++);}
+    else if(ganaB>ganaA){ p.equipos[1].forEach(jug=>stats[jug].v++); p.equipos[0].forEach(jug=>stats[jug].d++);}
+  }));
+  ligas[ligaActual]?.sanciones.forEach(s=>{ if(stats[s.jugador]) stats[s.jugador].jc+=s.juegos; });
+  const tabla=Object.entries(stats).map(([jug,s])=>{
+    const motivos=ligas[ligaActual].sanciones.filter(x=>x.jugador===jug).map(x=>x.motivo).join(' | ');
+    return {jugador:jug,v:s.v,d:s.d,setsGanados:s.setsGan,setsPerdidos:s.setsPer,jp:s.jp,jc:s.jc,dif:s.jp-s.jc,motivos};
+  }).sort((a,b)=>b.v-a.v||b.setsGanados-a.setsGanados||b.dif-a.dif);
+  const tbody=document.getElementById('clasificacion'); tbody.innerHTML='';
+  tabla.forEach((t,i)=>{
+    tbody.innerHTML+=`<tr>
+      <td>${i+1}</td><td>${t.jugador}</td><td>${t.v}</td><td>${t.d}</td><td>${t.setsGanados}</td>
+      <td>${t.setsPerdidos}</td><td>${t.jp}</td><td>${t.jc}</td><td>${t.dif}</td><td>${t.motivos||''}</td>
+    </tr>`;
+  });
+}
+
+/* ================= Sanciones ================= */
+
+function anadirSancion(){
+  const jugador=document.getElementById('sancJugador').value;
+  const juegos=parseInt(document.getElementById('sancJuegos').value)||0;
+  const motivo=document.getElementById('sancMotivo').value||'';
+  if(!jugador||juegos<=0) return alert('Selecciona jugador y juegos>0');
+  ligas[ligaActual].sanciones.push({jugador,juegos,motivo});
+  document.getElementById('sancJuegos').value=''; document.getElementById('sancMotivo').value='';
+  actualizarClasificacion(); guardarTodo();
+}
+
+function quitarTodasSanciones(){ if(!confirm('Quitar todas?')) return; ligas[ligaActual].sanciones=[]; actualizarClasificacion(); guardarTodo(); }
+
+/* ================= Export / Import ================= */
+
+function descargarLiga(){
+  const data=JSON.stringify(ligas[ligaActual],null,2);
+  const blob=new Blob([data],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`liga_${ligaActual}.json`; a.click();
+}
+
+function cargarLigaArchivo(e){
+  const file=e.target.files[0]; if(!file) return;
+  const r=new FileReader();
+  r.onload=function(ev){
+    try{
+      const data=JSON.parse(ev.target.result);
+      if(!ligaActual) return alert('Crea o selecciona una liga antes');
+      ligas[ligaActual]=data;
+      cargarLigaActual(); guardarTodo();
+    }catch(err){ alert('Archivo inválido'); }
+  }
+  r.readAsText(file);
+}
+
+cargarTodo();
+</script>
+</body>
+</html>
